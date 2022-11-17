@@ -1,0 +1,62 @@
+-----------BASIC CONFORMANCE-----------
+---------Query 1:----------------
+//Query 1
+MATCH (P1:Process:Finish)
+MATCH (Q1:Process:Finish)
+MERGE (P1) - [:conformsTo] -> (Q1) 
+
+
+---------Query 2 (combines clauses 2 3 and 4)--------
+//Query 2
+MATCH (P1:Process) - [r1:next|fork|join]-> (P2:Process), (P1) - [:startsWith] -> (a1:Activity)//, (P2) - [:startsWith] -> (a3:Activity)
+MATCH (Q1:Process) - [r2:next|fork|join] -> (Q2:Process), (Q1) - [:startsWith] -> (a2:Activity)//, (Q2) - [:startsWith] -> (a4:Activity)
+WHERE a1.name=a2.name AND id(P1)<>id(Q1)
+MATCH (P2) - [:conformsTo] -> (Q2) 
+WHERE   size((P1) -[:next]->()) <= size((Q1) -[:next]->()) AND 
+        size((P1) -[:fork]->()) >= size((Q1) -[:fork]->()) AND 
+        size((P1) -[:join]->()) >= size((Q1) -[:join]->()) 
+MERGE (P1) - [:conformsTo] -> (Q1)
+-----------------------------------------------------------
+
+
+-----------SUBTYPES CONFORMANCE-----------
+
+//Query 2 subtypes
+MATCH (P1:Process) - [r1:next|fork|join]-> (P2:Process), (P1) - [:startsWith] -> (a1:Activity)
+MATCH (Q1:Process) - [r2:next|fork|join] -> (Q2:Process), (Q1) - [:startsWith] -> (a2:Activity)
+OPTIONAL MATCH (a1) - [s:subtypeOf] -> (a2) //optional match so it includes subtypes but doesn't limit it to them
+WITH a1, a2, P1, P2, Q1, Q2, count(s) as subtype
+WHERE (a1.name=a2.name OR subType>0) AND id(P1)<>id(Q1)
+MATCH (P2) - [:conformsTo] -> (Q2) 
+WHERE   size((P1) -[:next]->()) <= size((Q1) -[:next]->()) AND 
+        size((P1) -[:fork]->()) >= size((Q1) -[:fork]->()) AND 
+        size((P1) -[:join]->()) >= size((Q1) -[:join]->()) 
+MERGE (P1) - [:conformsTo] -> (Q1)
+
+
+
+-------------------------------------------------------
+
+-----------UNCERTAINTY CONFORMANCE-----------
+
+--FINAL VERSION UNCERTAINTY---- 17-11-2022
+MATCH (P1:Process) - [r1:next|fork|join]-> (P2:Process), (P1) - [:startsWith] -> (a1:Activity)
+MATCH (Q1:Process) - [r2:next|fork|join] -> (Q2:Process), (Q1) - [:startsWith] -> (a2:Activity)
+WITH a1, a2, P1, P2, Q1, Q2, r1, r2
+WHERE ((a1) - [:subTypeOf] - (a2) OR a1.name=a2.name) AND id(P1)<>id(Q1)
+MATCH (P2) - [conforms:conformsTo] -> (Q2) 
+WITH a1, a2, P1, P2, Q1, Q2, r1, r2, coalesce(size((P1) -[:next]->()),0) as relationshipType, AVG(conforms.Certainty) as conformsCertaintyAvg, MAX(conforms.Certainty) as conformsCertaintyMax
+WHERE   size((P1) -[:next]->()) <= size((Q1) -[:next]->()) AND 
+        size((P1) -[:fork]->()) >= size((Q1) -[:fork]->()) AND 
+        size((P1) -[:join]->()) >= size((Q1) -[:join]->()) 
+//Calculation of uncertainty
+CALL apoc.do.when(
+  relationshipType > 0,
+  'RETURN AVG(coalesce(conformsCertaintyMax,1)) as certainty',
+  'RETURN AVG(coalesce(conformsCertaintyAvg,1)) as certainty',
+  {relationshipType:relationshipType, conformsCertaintyAvg:conformsCertaintyAvg, conformsCertaintyMax:conformsCertaintyMax})
+YIELD value
+OPTIONAL MATCH (a1) - [s:subTypeOf] - (a2)
+MERGE (P1) - [r:conformsTo] -> (Q1) WITH r, (coalesce(s.certainty,1) + value.certainty)/2 as finalCertainty SET r.Certainty = finalCertainty
+
+                                
